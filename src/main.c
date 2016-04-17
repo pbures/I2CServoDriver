@@ -8,35 +8,70 @@
 
 #include <avr/io.h>
 #include <util/delay.h>
-#include <stdlib.h>
 #include <avr/interrupt.h>
 
-#include "../I2C/I2C_slave.h"
+#include "../UsiTwi/UsiTwiSlave.h"
 #include "../Servo/Servo.h"
 
-// buffer used to convert integer to string
-char buffer[3];
+int main() {
+/* TODO:
+ * Find out why servo does not work as expected. Probably the timer1 is
+ * a bit different as on Atmega328p. Check datasheet.
+ *
+ * As a I2C master for now use the _2016_I2cServoMaster sketch which sends two byte
+ * number based on input from serial console.
+ *
+ */
+	DDRB = (1 << PB0) | (1 << PB1);
 
-int main(void){
-	
-	initTimer1Servo();
-	I2C_init(0x32); // initalize as slave with address 0x32
-
-	DDRB |= _BV(PB0) | _BV(PB2);
-	PORTB |= _BV(PB0) | _BV(PB2);
-	_delay_ms(1000);
-	PORTB &= ~(1<<PB2);
-
-	// allow interrupts
-	sei();
-	
-	while(1){
-		// convert receiver buffer index 0 to character array and send it via UART
-		//itoa(rxbuffer[0], buffer, 10);
-		//uart_puts(buffer);
-		_delay_ms(1000);
-		PORTB ^= ( 1 << PB0);
+	for (int i = 0; i < 5; i++) {
+		PORTB |= ((1 << PB0) | (1 << PB1));
+		_delay_ms(300);
+		PORTB &= ~((1 << PB0) | (1 << PB1));
+		_delay_ms(300);
 	}
-	
+
+	initTimer1Servo();
+	usiTwiSlaveInit(0x27);
+	sei();
+
+	uint8_t data[2];
+	uint8_t index = 0;
+
+	data[0] = 0;
+	data[1] = 0;
+
+	while (1) {
+
+		if (usiTwiDataInReceiveBuffer())
+			data[index++] = usiTwiReceiveByte();
+
+		if (index > 1) {
+			uint16_t val = data[1] * 256 + data[0];
+
+			for (int i = 0; i < val; i++) {
+				PORTB = 0x0;
+				_delay_ms(50);
+				PORTB = (1 << PB1);
+				_delay_ms(50);
+			}
+
+			for (int i = 0; i < 3; i++) {
+				PORTB |= ((1 << PB0) | (1 << PB1));
+				_delay_ms(300);
+				PORTB &= ~((1 << PB0) | (1 << PB1));
+				_delay_ms(300);
+			}
+
+			turnDegrees(val);
+
+			index = 0;
+			data[0] = 0;
+			data[1] = 1;
+		}
+
+		_delay_ms(1000);
+	}
+
 	return 0;
 }
