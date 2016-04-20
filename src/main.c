@@ -13,15 +13,15 @@
 #include "../UsiTwi/UsiTwiSlave.h"
 #include "../Servo/Servo.h"
 
+#define DEVICE_ADDRESS 0x27
+
 int main() {
-	/* TODO:
-	 * The servo init code is fixed, the width is controlled by OCR1B value in ms (500 -- 2000).
-	 * I have managed to run it in ATTiny84Blink, test it here with the I2C in place.
-	 *
-	 * As a I2C master for now use the _2016_I2cServoMaster sketch which sends two byte
-	 * number based on input from serial console.
-	 *
+	/* The servo pulse width is controlled by OCR1B value in ms (500 -- 2000).
+	 * As a I2C master for now use the I2CServoDriverMaster in eclipseArduino.
+	 * I do not have twi master code without Arduino libs.
 	 */
+
+	/* Those two pins are used for debugging! */
 	DDRB = (1 << PB0) | (1 << PB1);
 
 	for (int i = 0; i < 2; i++) {
@@ -31,59 +31,17 @@ int main() {
 		_delay_ms(300);
 	}
 
+	/* Init Timer1 for servo and USI device for TWI */
 	initTimer1Servo();
-	usiTwiSlaveInit(0x27);
+	usiTwiSlaveInit(DEVICE_ADDRESS);
 	sei();
 
-	turnDegrees(0);
-	_delay_ms(300);
-	turnDegrees(90);
-	_delay_ms(300);
-	turnDegrees(180);
-	_delay_ms(300);
-
-
-//	uint8_t data[2];
-//	uint8_t index = 0;
-//
-//	data[0] = 0;
-//	data[1] = 0;
-
 	while (1) {
-
-//		if (usiTwiDataInReceiveBuffer())
-//			data[index++] = usiTwiReceiveByte();
-//
-//		if (index > 1) {
-//			uint16_t val = data[1] * 256 + data[0];
-//
-//			for (int i = 0; i < val; i++) {
-//				PORTB = 0x0;
-//				_delay_ms(50);
-//				PORTB = (1 << PB1);
-//				_delay_ms(50);
-//			}
-//
-//			for (int i = 0; i < 3; i++) {
-//				PORTB |= ((1 << PB0) | (1 << PB1));
-//				_delay_ms(300);
-//				PORTB &= ~((1 << PB0) | (1 << PB1));
-//				_delay_ms(300);
-//			}
-//
-//			turnDegrees(val);
-//
-//			index = 0;
-//			data[0] = 0;
-//			data[1] = 1;
-//		}
-//
-//		PORTB = (1 << PB0);
-//		_delay_ms(50);
-//		PORTB = (1 << PB1);
-//		_delay_ms(50);
-
-		_delay_ms(1000);
+		/* TODO:
+		 * Probably we can put ATTiny84 to sleep after
+		 * giving some time to server to move to the right
+		 * position.
+		 */
 	}
 
 	return 0;
