@@ -4,6 +4,10 @@
 
 /********************************************************************************
 
+ The code is based on Donald R. Blake TWI Slave Driver.
+ This has been extemenly simplified, and basically only the slave response state
+ machine was left with initialization routine.
+
  USI TWI Slave driver.
 
  Created by Donald R. Blake
@@ -43,7 +47,10 @@
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <util/delay.h>
 #include "usiTwiSlave.h"
+#include "../Util/utils.h"
+#include "../Servo/Servo.h"
 
 /********************************************************************************
 
@@ -88,7 +95,7 @@
 #  define PORT_USI_SCL        PA4
 #  define PIN_USI_SDA         PINA6
 #  define PIN_USI_SCL         PINA4
-#  define USI_START_COND_INT  USISIF //was USICIF jjg
+#  define USI_START_COND_INT  USISIF
 #  define USI_START_VECTOR    USI_START_vect
 #  define USI_OVERFLOW_VECTOR USI_OVF_vect
 #endif
@@ -240,56 +247,22 @@
 
 typedef enum {
 	USI_SLAVE_CHECK_ADDRESS = 0x00,
-	USI_SLAVE_SEND_DATA = 0x01,
 	USI_SLAVE_REQUEST_REPLY_FROM_SEND_DATA = 0x02,
+	USI_SLAVE_GET_DATA_AND_SEND_ACK = 0x05,
+
+	/* For now we are not sending data back, these states are not needed */
 	USI_SLAVE_CHECK_REPLY_FROM_SEND_DATA = 0x03,
-	USI_SLAVE_REQUEST_DATA = 0x04,
-	USI_SLAVE_GET_DATA_AND_SEND_ACK = 0x05
+	USI_SLAVE_SEND_DATA = 0x01,
+	USI_SLAVE_REQUEST_DATA = 0x04
 } overflowState_t;
-
-/********************************************************************************
-
- local variables
-
- ********************************************************************************/
 
 static uint8_t slaveAddress;
 static volatile overflowState_t overflowState;
 
-static uint8_t rxBuf[TWI_RX_BUFFER_SIZE];
-static volatile uint8_t rxHead;
-static volatile uint8_t rxTail;
-
-static uint8_t txBuf[TWI_TX_BUFFER_SIZE];
-static volatile uint8_t txHead;
-static volatile uint8_t txTail;
-
-/********************************************************************************
-
- local functions
-
- ********************************************************************************/
-
-// flushes the TWI buffers
-static
-void flushTwiBuffers(void) {
-	rxTail = 0;
-	rxHead = 0;
-	txTail = 0;
-	txHead = 0;
-} // end flushTwiBuffers
-
-/********************************************************************************
-
- public functions
-
- ********************************************************************************/
-
-// initialise USI for TWI slave mode
+static volatile uint8_t degrees[2];
+static uint8_t dataIndex;
 
 void usiTwiSlaveInit(uint8_t ownAddress) {
-
-	flushTwiBuffers();
 
 	slaveAddress = ownAddress;
 
@@ -324,63 +297,9 @@ void usiTwiSlaveInit(uint8_t ownAddress) {
 					(0 << USITC);
 
 	// clear all interrupt flags and reset overflow counter
-
 	USISR = (1 << USI_START_COND_INT) | (1 << USIOIF) | (1 << USIPF)
 			| (1 << USIDC);
-
 } // end usiTwiSlaveInit
-
-// put data in the transmission buffer, wait if buffer is full
-
-void usiTwiTransmitByte(uint8_t data) {
-
-	uint8_t tmphead;
-
-	// calculate buffer index
-	tmphead = (txHead + 1) & TWI_TX_BUFFER_MASK;
-
-	// wait for free space in buffer
-	while (tmphead == txTail)
-		;
-
-	// store data in buffer
-	txBuf[tmphead] = data;
-
-	// store new index
-	txHead = tmphead;
-
-} // end usiTwiTransmitByte
-
-// return a byte from the receive buffer, wait if buffer is empty
-
-uint8_t usiTwiReceiveByte(void) {
-
-	// wait for Rx data
-	while (rxHead == rxTail)
-		;
-
-	// calculate buffer index
-	rxTail = (rxTail + 1) & TWI_RX_BUFFER_MASK;
-
-	// return data from the buffer.
-	return rxBuf[rxTail];
-
-} // end usiTwiReceiveByte
-
-// check if there is data in the receive buffer
-
-bool usiTwiDataInReceiveBuffer(void) {
-
-	// return 0 (false) if the receive buffer is empty
-	return rxHead != rxTail;
-
-} // end usiTwiDataInReceiveBuffer
-
-/********************************************************************************
-
- USI Start Condition ISR
-
- ********************************************************************************/
 
 ISR( USI_START_VECTOR ) {
 
@@ -395,15 +314,13 @@ ISR( USI_START_VECTOR ) {
 	// the interrupt to prevent waiting forever - don't use USISR to test for Stop
 	// Condition as in Application Note AVR312 because the Stop Condition Flag is
 	// going to be set from the last TWI sequence
+
 	while (
-	// SCL his high
-	(PIN_USI & (1 << PIN_USI_SCL)) &&
-	// and SDA is low
-			!((PIN_USI & (1 << PIN_USI_SDA))))
+	// SCL his high and SDA is low
+	(PIN_USI & (1 << PIN_USI_SCL)) && !((PIN_USI & (1 << PIN_USI_SDA))))
 		;
 
 	if (!(PIN_USI & (1 << PIN_USI_SDA))) {
-
 		// a Stop Condition did not occur
 
 		USICR =
@@ -469,6 +386,7 @@ ISR( USI_OVERFLOW_VECTOR ) {
 				overflowState = USI_SLAVE_SEND_DATA;
 			} else {
 				overflowState = USI_SLAVE_REQUEST_DATA;
+				dataIndex = 0;
 			} // end if
 			SET_USI_TO_SEND_ACK( )
 			;
@@ -493,16 +411,16 @@ ISR( USI_OVERFLOW_VECTOR ) {
 		// copy data from buffer to USIDR and set USI to shift byte
 		// next USI_SLAVE_REQUEST_REPLY_FROM_SEND_DATA
 	case USI_SLAVE_SEND_DATA:
-		// Get data from Buffer
-		if (txHead != txTail) {
-			txTail = (txTail + 1) & TWI_TX_BUFFER_MASK;
-			USIDR = txBuf[txTail];
-		} else {
-			// the buffer is empty
-			SET_USI_TO_TWI_START_CONDITION_MODE( )
-			;
-			return;
-		} // end if
+//		// Get data from Buffer
+//		if (txHead != txTail) {
+//			txTail = (txTail + 1) & TWI_TX_BUFFER_MASK;
+//			USIDR = txBuf[txTail];
+//		} else {
+//			// the buffer is empty
+//			SET_USI_TO_TWI_START_CONDITION_MODE( )
+//			;
+//			return;
+//		} // end if
 		overflowState = USI_SLAVE_REQUEST_REPLY_FROM_SEND_DATA;
 		SET_USI_TO_SEND_DATA( )
 		;
@@ -527,10 +445,15 @@ ISR( USI_OVERFLOW_VECTOR ) {
 		// copy data from USIDR and send ACK
 		// next USI_SLAVE_REQUEST_DATA
 	case USI_SLAVE_GET_DATA_AND_SEND_ACK:
-		// put data into buffer
-		// Not necessary, but prevents warnings
-		rxHead = (rxHead + 1) & TWI_RX_BUFFER_MASK;
-		rxBuf[rxHead] = USIDR;
+
+		dataIndex = (dataIndex > 1) ? 0 : dataIndex;
+		degrees[dataIndex++] = USIDR;
+
+		if (dataIndex == 2) {
+			uint16_t deg = (degrees[1] * 0xff) + degrees[0];
+			turnDegrees(deg);
+		}
+
 		// next USI_SLAVE_REQUEST_DATA
 		overflowState = USI_SLAVE_REQUEST_DATA;
 		SET_USI_TO_SEND_ACK( )
